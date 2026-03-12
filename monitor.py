@@ -5,8 +5,8 @@ import time
 import os
 
 # 환경변수에서 값 읽기
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+TELEGRAM_TOKEN = os.environ.get("8614375940:AAGIBes-fWlvd8Ifch7L8wKdaVBuGKuf0wo")
+CHAT_ID = os.environ.get("5832781114")
 
 # 모니터링할 koFIU 페이지
 TARGET_URL = "https://www.kofiu.go.kr/kor/finance/limitList.do"
