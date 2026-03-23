@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import hashlib
 import os
 import json
+import re
 from datetime import datetime
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -18,12 +19,11 @@ def get_limit_info(url):
         print("제한대상자 페이지 접속 시도: {}".format(url))
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
-        print("제한대상자 페이지 응답코드: {}".format(response.status_code))
+        print("제한대상자 응답코드: {}".format(response.status_code))
 
         soup = BeautifulSoup(response.text, "html.parser")
         content = soup.get_text()
         page_hash = hashlib.md5(content.encode()).hexdigest()
-        print("제한대상자 해시: {}".format(page_hash))
 
         update_date = "확인 불가"
         for tag in soup.find_all(string=True):
@@ -32,19 +32,24 @@ def get_limit_info(url):
                 update_date = t
                 break
 
+        def extract_number(text):
+            nums = re.findall(r"\d+", text)
+            return nums[0] if nums else "?"
+
         lines = [l.strip() for l in content.splitlines() if l.strip()]
-        un_1267 = un_1718 = un_1988 = un_1737 = un_total = "확인 불가"
+        un_1267 = un_1718 = un_1988 = un_1737 = un_total = "?"
+
         for line in lines:
             if "1267" in line and ("명" in line or "개" in line):
-                un_1267 = line
+                un_1267 = extract_number(line)
             if "1718" in line and ("명" in line or "개" in line):
-                un_1718 = line
+                un_1718 = extract_number(line)
             if "1988" in line and ("명" in line or "개" in line):
-                un_1988 = line
+                un_1988 = extract_number(line)
             if "1737" in line and ("명" in line or "개" in line):
-                un_1737 = line
+                un_1737 = extract_number(line)
             if "총" in line and ("명" in line or "개" in line):
-                un_total = line
+                un_total = extract_number(line)
 
         return page_hash, update_date, un_1267, un_1718, un_1988, un_1737, un_total
     except Exception as e:
@@ -57,12 +62,11 @@ def get_announce_info(url):
         print("공고/고시 페이지 접속 시도: {}".format(url))
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
-        print("공고/고시 페이지 응답코드: {}".format(response.status_code))
+        print("공고/고시 응답코드: {}".format(response.status_code))
 
         soup = BeautifulSoup(response.text, "html.parser")
         content = soup.get_text()
         page_hash = hashlib.md5(content.encode()).hexdigest()
-        print("공고/고시 해시: {}".format(page_hash))
 
         posts = []
         rows = soup.select("table tbody tr")
@@ -119,7 +123,7 @@ def load_hashes():
 def save_hashes(hashes):
     with open(HASH_FILE, "w") as f:
         json.dump(hashes, f)
-    print("해시 저장 완료: {}".format(hashes))
+    print("해시 저장 완료")
 
 
 def main():
@@ -130,35 +134,36 @@ def main():
     new_hashes = {}
     messages = []
 
+    # ① 금융거래등제한대상자 명단 모니터링
     result = get_limit_info(LIMIT_URL)
     limit_hash, limit_date, un_1267, un_1718, un_1988, un_1737, un_total = result
 
     if limit_hash:
         new_hashes["limit"] = limit_hash
         last_limit = last_hashes.get("limit")
-        print("이전 제한대상자 해시: {}".format(last_limit))
-        print("현재 제한대상자 해시: {}".format(limit_hash))
 
         un_info = (
             "[ UN 제재대상자 현황 ]\n"
-            "ISIL/Al-Qaida (결의 1267호): {}\n"
-            "북한 DPRK    (결의 1718호): {}\n"
-            "탈레반       (결의 1988호): {}\n"
-            "이란         (결의 1737호): {}\n"
-            "총계: {}"
+            "1267호 (ISIL/Al-Qaida): {}명\n"
+            "1718호 (북한 DPRK)    : {}명\n"
+            "1988호 (탈레반)       : {}명\n"
+            "1737호 (이란)         : {}명\n"
+            "총계                  : {}명"
         ).format(un_1267, un_1718, un_1988, un_1737, un_total)
 
         if last_limit is None:
             messages.append(
                 "[koFIU 금융거래등제한대상자 모니터링 시작]\n\n"
-                "시작일: {}\n\n{}\n\n"
+                "시작일: {}\n\n"
+                "{}\n\n"
                 "최근 업데이트: {}\n"
                 "링크: {}".format(today, un_info, limit_date, LIMIT_URL)
             )
         elif limit_hash != last_limit:
             messages.append(
                 "[긴급] 금융거래등제한대상자 명단 변경 감지!\n\n"
-                "감지일: {}\n\n{}\n\n"
+                "감지일: {}\n\n"
+                "{}\n\n"
                 "최근 업데이트: {}\n"
                 "링크: {}\n\n"
                 "즉시 확인하여 시스템에 반영해 주세요!".format(today, un_info, limit_date, LIMIT_URL)
@@ -172,13 +177,12 @@ def main():
                 "링크: {}".format(today, un_info, limit_date, LIMIT_URL)
             )
 
+    # ② 공고/고시/훈령/예규 모니터링
     announce_hash, posts, latest_date = get_announce_info(ANNOUNCE_URL)
 
     if announce_hash:
         new_hashes["announce"] = announce_hash
         last_announce = last_hashes.get("announce")
-        print("이전 공고/고시 해시: {}".format(last_announce))
-        print("현재 공고/고시 해시: {}".format(announce_hash))
 
         post_lines = ""
         for i, p in enumerate(posts, 1):
@@ -188,14 +192,16 @@ def main():
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
                 "시작일: {}\n\n"
-                "[ 최근 게시글 ]\n{}\n"
+                "[ 최근 게시글 ]\n"
+                "{}\n"
                 "링크: {}".format(today, post_lines, ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 신규 업데이트!\n\n"
                 "감지일: {}\n\n"
-                "[ 최근 게시글 ]\n{}\n"
+                "[ 최근 게시글 ]\n"
+                "{}\n"
                 "링크: {}\n\n"
                 "즉시 확인해 주세요!".format(today, post_lines, ANNOUNCE_URL)
             )
@@ -203,7 +209,8 @@ def main():
             print("공고/고시 변경 없음")
             messages.append(
                 "[{}] 공고/고시/훈령/예규 변경없음 (최근게시글 {})\n\n"
-                "[ 최근 게시글 ]\n{}\n"
+                "[ 최근 게시글 ]\n"
+                "{}\n"
                 "링크: {}".format(today, latest_date, post_lines, ANNOUNCE_URL)
             )
 
