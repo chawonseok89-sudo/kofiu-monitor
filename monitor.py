@@ -7,9 +7,8 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# 업데이트된 koFIU URL
-TARGET_URL = "https://www.kofiu.go.kr/kor/main.do"
-LIMIT_PAGE_URL = "https://www.kofiu.go.kr/kor/finance/limitList.do"
+# 새로운 koFIU 금융거래등제한대상자 페이지 URL
+TARGET_URL = "https://www.kofiu.go.kr/kor/policy/ptfps02_1.do"
 HASH_FILE = "last_hash.txt"
 
 
@@ -22,7 +21,7 @@ def get_page_info(url):
         page_hash = hashlib.md5(content.encode()).hexdigest()
 
         update_date = "확인 불가"
-        date_candidates = soup.find_all(string=lambda t: t and ("개정" in t or "최종" in t or "갱신" in t or "update" in t.lower()))
+        date_candidates = soup.find_all(string=lambda t: t and ("개정" in t or "최종" in t or "갱신" in t or "고시" in t))
         if date_candidates:
             update_date = date_candidates[0].strip()
 
@@ -44,16 +43,7 @@ def send_telegram(message):
 
 def main():
     today = datetime.now().strftime("%Y년 %m월 %d일")
-
-    # 먼저 제한대상자 명단 페이지 접근 시도
-    current_hash, update_date, status_code = get_page_info(LIMIT_PAGE_URL)
-
-    # 페이지가 없으면 메인 페이지로 대체
-    if not current_hash or status_code == 404:
-        current_hash, update_date, status_code = get_page_info(TARGET_URL)
-        used_url = TARGET_URL
-    else:
-        used_url = LIMIT_PAGE_URL
+    current_hash, update_date, status_code = get_page_info(TARGET_URL)
 
     if not current_hash:
         send_telegram("[{}] koFIU 페이지 조회에 실패했습니다. 잠시 후 다시 시도합니다.".format(today))
@@ -69,8 +59,8 @@ def main():
         message = (
             "[koFIU 모니터링 시작]\n"
             "시작일: {}\n"
-            "모니터링 URL: {}"
-        ).format(today, used_url)
+            "링크: {}"
+        ).format(today, TARGET_URL)
         send_telegram(message)
 
     elif current_hash != last_hash:
@@ -81,7 +71,7 @@ def main():
             "최근 개정 정보: {}\n\n"
             "링크: {}\n\n"
             "즉시 확인하여 시스템에 반영해 주세요!"
-        ).format(today, update_date, used_url)
+        ).format(today, update_date, TARGET_URL)
         send_telegram(message)
 
     else:
@@ -90,7 +80,7 @@ def main():
             "금융거래등 제한대상자 명단이 전일과 동일합니다.\n"
             "최근 개정 정보: {}\n\n"
             "링크: {}"
-        ).format(today, update_date, used_url)
+        ).format(today, update_date, TARGET_URL)
         send_telegram(message)
 
     with open(HASH_FILE, "w") as f:
