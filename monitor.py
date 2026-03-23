@@ -25,12 +25,12 @@ def get_page_info(url):
 
         return page_hash, update_date
     except Exception as e:
-        print(f"페이지 조회 오류: {e}")
+        print("페이지 조회 오류: {}".format(e))
         return None, None
 
 
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = "https://api.telegram.org/bot{}/sendMessage".format(TELEGRAM_TOKEN)
     data = {
         "chat_id": CHAT_ID,
         "text": message,
@@ -44,7 +44,7 @@ def main():
     current_hash, update_date = get_page_info(TARGET_URL)
 
     if not current_hash:
-        send_telegram(f"⚠️ [{today}] koFIU 페이지 조회에 실패했습니다.\n잠시 후 다시 시도합니다.")
+        send_telegram("[{}] koFIU 페이지 조회에 실패했습니다. 잠시 후 다시 시도합니다.".format(today))
         return
 
     try:
@@ -55,62 +55,31 @@ def main():
 
     if last_hash is None:
         message = (
-            f"✅ <b>koFIU 모니터링 시작!</b>\n"
-            f"📅 시작일: {today}\n"
-            f"🔗 <a href='{TARGET_URL}'>koFIU 제한대상자 명단 바로가기</a>"
-        )
+            "[koFIU 모니터링 시작]\n"
+            "시작일: {}\n"
+            "링크: {}"
+        ).format(today, TARGET_URL)
         send_telegram(message)
 
     elif current_hash != last_hash:
         message = (
-            f"🚨 <b>koFIU 금융거래등 제한대상자 명단 업데이트 감지!</b>\n\n"
-            f"📅 감지일: {today}\n"
-            f"📋 공중협박자금조달 관련 명단이 변경되었습니다.\n"
-            f"🗓 최근 개정 정보: {update_date}\n\n"
-            f"🔗 <a href='{TARGET_URL}'>koFIU 제한대상자 명단 바로가기</a>\n\n"
-            f"⏰ 즉시 확인하여 시스템에 반영해 주세요!"
-        )
+            "[긴급] koFIU 금융거래등 제한대상자 명단 업데이트 감지!\n\n"
+            "감지일: {}\n"
+            "공중협박자금조달 관련 명단이 변경되었습니다.\n"
+            "최근 개정 정보: {}\n\n"
+            "링크: {}\n\n"
+            "즉시 확인하여 시스템에 반영해 주세요!"
+        ).format(today, update_date, TARGET_URL)
         send_telegram(message)
 
     else:
         message = (
-            f"✅ <b>[{today}] koFIU 명단 변경사항 없음</b>\n\n"
-            f"📋 금융거래등 제한대상자 명단이 전일과 동일합니다.\n"
-            f"🗓 최근 개정 정보: {update_date}\n\n"
-            f"🔗 <a href='{TARGET_URL}'>koFIU 제한대상자 명단 바로가기</a>"
-        )
+            "[{}] koFIU 명단 변경사항 없음\n\n"
+            "금융거래등 제한대상자 명단이 전일과 동일합니다.\n"
+            "최근 개정 정보: {}\n\n"
+            "링크: {}"
+        ).format(today, update_date, TARGET_URL)
         send_telegram(message)
-
-    with open(HASH_FILE, "w") as f:
-        f.write(current_hash)
-
 
 if __name__ == "__main__":
     main()
-```
-
----
-
-## 📱 텔레그램 알림 예시
-
-**변경사항 없을 때:**
-```
-✅ [2026년 03월 23일] koFIU 명단 변경사항 없음
-
-📋 금융거래등 제한대상자 명단이 전일과 동일합니다.
-🗓 최근 개정 정보: 2026.03.20
-
-🔗 koFIU 제한대상자 명단 바로가기
-```
-
-**변경 감지 시:**
-```
-🚨 koFIU 금융거래등 제한대상자 명단 업데이트 감지!
-
-📅 감지일: 2026년 03월 23일
-📋 공중협박자금조달 관련 명단이 변경되었습니다.
-🗓 최근 개정 정보: 2026.03.23
-
-🔗 koFIU 제한대상자 명단 바로가기
-
-⏰ 즉시 확인하여 시스템에 반영해 주세요!
