@@ -16,10 +16,10 @@ HASH_FILE = "last_hash.json"
 
 def get_limit_info(url):
     try:
-        print("제한대상자 페이지 접속 시도: {}".format(url))
+        print("제한대상자 페이지 접속 시도")
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
-        print("제한대상자 응답코드: {}".format(response.status_code))
+        print("응답코드: {}".format(response.status_code))
 
         soup = BeautifulSoup(response.text, "html.parser")
         content = soup.get_text()
@@ -32,25 +32,43 @@ def get_limit_info(url):
                 update_date = t
                 break
 
-        def extract_number(text):
-            nums = re.findall(r"\d+", text)
-            return nums[0] if nums else "?"
+        un_1267 = un_1718 = un_1988 = un_1737 = un_total = "확인 불가"
 
-        lines = [l.strip() for l in content.splitlines() if l.strip()]
-        un_1267 = un_1718 = un_1988 = un_1737 = un_total = "?"
+        tables = soup.find_all("table")
+        for table in tables:
+            rows = table.find_all("tr")
+            for row in rows:
+                cells = row.find_all(["td", "th"])
+                row_text = " ".join([c.get_text(strip=True) for c in cells])
+                print("테이블 행: {}".format(row_text[:100]))
 
-        for line in lines:
-            if "1267" in line and ("명" in line or "개" in line):
-                un_1267 = extract_number(line)
-            if "1718" in line and ("명" in line or "개" in line):
-                un_1718 = extract_number(line)
-            if "1988" in line and ("명" in line or "개" in line):
-                un_1988 = extract_number(line)
-            if "1737" in line and ("명" in line or "개" in line):
-                un_1737 = extract_number(line)
-            if "총" in line and ("명" in line or "개" in line):
-                un_total = extract_number(line)
+                if "1267" in row_text:
+                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
+                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
+                    if counts:
+                        un_1267 = counts[-1]
+                if "1718" in row_text:
+                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
+                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
+                    if counts:
+                        un_1718 = counts[-1]
+                if "1988" in row_text and "1267" not in row_text:
+                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
+                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
+                    if counts:
+                        un_1988 = counts[-1]
+                if "1737" in row_text:
+                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
+                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
+                    if counts:
+                        un_1737 = counts[-1]
+                if "합계" in row_text or "총계" in row_text or "total" in row_text.lower():
+                    nums = re.findall(r"\b(\d+)\b", row_text)
+                    counts = [n for n in nums if not (2000 <= int(n) <= 2099)]
+                    if counts:
+                        un_total = counts[-1]
 
+        print("1267:{} 1718:{} 1988:{} 1737:{} 총:{}".format(un_1267, un_1718, un_1988, un_1737, un_total))
         return page_hash, update_date, un_1267, un_1718, un_1988, un_1737, un_total
     except Exception as e:
         print("제한대상자 페이지 오류: {}".format(e))
@@ -59,34 +77,47 @@ def get_limit_info(url):
 
 def get_announce_info(url):
     try:
-        print("공고/고시 페이지 접속 시도: {}".format(url))
+        print("공고/고시 페이지 접속 시도")
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
-        print("공고/고시 응답코드: {}".format(response.status_code))
+        print("응답코드: {}".format(response.status_code))
 
         soup = BeautifulSoup(response.text, "html.parser")
         content = soup.get_text()
         page_hash = hashlib.md5(content.encode()).hexdigest()
 
         posts = []
-        rows = soup.select("table tbody tr")
-        print("테이블 행 수: {}".format(len(rows)))
-        for row in rows[:3]:
-            cells = row.find_all("td")
-            if len(cells) >= 2:
-                title = cells[1].get_text(strip=True)
-                date = cells[-1].get_text(strip=True)
-                if title:
-                    posts.append({"title": title, "date": date})
+        selectors = ["table tbody tr", ".board_list tbody tr", ".list_wrap tbody tr", "tbody tr"]
+
+        for sel in selectors:
+            rows = soup.select(sel)
+            print("셀렉터 '{}' 결과: {}개".format(sel, len(rows)))
+            for row in rows[:3]:
+                cells = row.find_all("td")
+                if len(cells) >= 2:
+                    title = ""
+                    date = ""
+                    for cell in cells:
+                        txt = cell.get_text(strip=True)
+                        if len(txt) > len(title) and not txt.isdigit():
+                            title = txt
+                        if re.search(r"\d{4}[.\-]\d{2}[.\-]\d{2}", txt):
+                            date = txt
+                    if title and len(title) > 3:
+                        posts.append({"title": title[:50], "date": date})
+            if posts:
+                break
 
         if not posts:
-            items = soup.select(".board-list li, .list-wrap li")
-            for item in items[:3]:
-                text = item.get_text(strip=True)
-                if text:
-                    posts.append({"title": text[:60], "date": ""})
+            links = soup.select("a")
+            for link in links:
+                txt = link.get_text(strip=True)
+                if len(txt) > 10 and ("고시" in txt or "훈령" in txt or "예규" in txt or "공고" in txt):
+                    posts.append({"title": txt[:50], "date": ""})
+                if len(posts) >= 3:
+                    break
 
-        print("추출된 게시글 수: {}".format(len(posts)))
+        print("추출된 게시글: {}".format(posts))
         latest_date = posts[0]["date"] if posts else "확인 불가"
         return page_hash, posts, latest_date
     except Exception as e:
@@ -96,17 +127,11 @@ def get_announce_info(url):
 
 def send_telegram(message):
     print("텔레그램 전송 시도...")
-    print("TOKEN 앞 10자리: {}".format(str(TELEGRAM_TOKEN)[:10] if TELEGRAM_TOKEN else "없음"))
-    print("CHAT_ID: {}".format(CHAT_ID))
     url = "https://api.telegram.org/bot{}/sendMessage".format(TELEGRAM_TOKEN)
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
+    data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     response = requests.post(url, data=data)
     print("텔레그램 응답코드: {}".format(response.status_code))
-    print("텔레그램 응답내용: {}".format(response.text[:200]))
+    print("텔레그램 응답: {}".format(response.text[:200]))
 
 
 def load_hashes():
@@ -154,10 +179,9 @@ def main():
         if last_limit is None:
             messages.append(
                 "[koFIU 금융거래등제한대상자 모니터링 시작]\n\n"
-                "시작일: {}\n\n"
                 "{}\n\n"
                 "최근 업데이트: {}\n"
-                "링크: {}".format(today, un_info, limit_date, LIMIT_URL)
+                "링크: {}".format(un_info, limit_date, LIMIT_URL)
             )
         elif limit_hash != last_limit:
             messages.append(
@@ -169,7 +193,6 @@ def main():
                 "즉시 확인하여 시스템에 반영해 주세요!".format(today, un_info, limit_date, LIMIT_URL)
             )
         else:
-            print("제한대상자 변경 없음")
             messages.append(
                 "[{}] 금융거래등제한대상자 명단 변경없음\n\n"
                 "{}\n\n"
@@ -186,32 +209,34 @@ def main():
 
         post_lines = ""
         for i, p in enumerate(posts, 1):
-            post_lines += "{}. {} ({})\n".format(i, p["title"], p["date"])
+            if p["date"]:
+                post_lines += "{}. {} ({})\n".format(i, p["title"], p["date"])
+            else:
+                post_lines += "{}. {}\n".format(i, p["title"])
 
         if last_announce is None:
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
-                "시작일: {}\n\n"
                 "[ 최근 게시글 ]\n"
                 "{}\n"
-                "링크: {}".format(today, post_lines, ANNOUNCE_URL)
+                "링크: {}".format(post_lines if post_lines else "게시글 확인 불가\n", ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
             messages.append(
-                "[긴급] 공고/고시/훈령/예규 신규 업데이트!\n\n"
+                "[긴급] 공고/고시/훈령/예규 업데이트!\n\n"
                 "감지일: {}\n\n"
-                "[ 최근 게시글 ]\n"
+                "[ 변경된 최근 게시글 ]\n"
                 "{}\n"
                 "링크: {}\n\n"
-                "즉시 확인해 주세요!".format(today, post_lines, ANNOUNCE_URL)
+                "즉시 확인해 주세요!".format(today, post_lines if post_lines else "게시글 확인 불가\n", ANNOUNCE_URL)
             )
         else:
-            print("공고/고시 변경 없음")
             messages.append(
-                "[{}] 공고/고시/훈령/예규 변경없음 (최근게시글 {})\n\n"
+                "[{}] 공고/고시/훈령/예규 변동없음\n"
+                "(최근게시글 {})\n\n"
                 "[ 최근 게시글 ]\n"
                 "{}\n"
-                "링크: {}".format(today, latest_date, post_lines, ANNOUNCE_URL)
+                "링크: {}".format(today, latest_date, post_lines if post_lines else "게시글 확인 불가\n", ANNOUNCE_URL)
             )
 
     print("전송할 메시지 수: {}".format(len(messages)))
