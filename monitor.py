@@ -6,7 +6,10 @@ from datetime import datetime
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-TARGET_URL = "https://www.kofiu.go.kr/kor/finance/limitList.do"
+
+# 업데이트된 koFIU URL
+TARGET_URL = "https://www.kofiu.go.kr/kor/main.do"
+LIMIT_PAGE_URL = "https://www.kofiu.go.kr/kor/finance/limitList.do"
 HASH_FILE = "last_hash.txt"
 
 
@@ -23,10 +26,10 @@ def get_page_info(url):
         if date_candidates:
             update_date = date_candidates[0].strip()
 
-        return page_hash, update_date
+        return page_hash, update_date, response.status_code
     except Exception as e:
         print("페이지 조회 오류: {}".format(e))
-        return None, None
+        return None, None, None
 
 
 def send_telegram(message):
@@ -41,7 +44,16 @@ def send_telegram(message):
 
 def main():
     today = datetime.now().strftime("%Y년 %m월 %d일")
-    current_hash, update_date = get_page_info(TARGET_URL)
+
+    # 먼저 제한대상자 명단 페이지 접근 시도
+    current_hash, update_date, status_code = get_page_info(LIMIT_PAGE_URL)
+
+    # 페이지가 없으면 메인 페이지로 대체
+    if not current_hash or status_code == 404:
+        current_hash, update_date, status_code = get_page_info(TARGET_URL)
+        used_url = TARGET_URL
+    else:
+        used_url = LIMIT_PAGE_URL
 
     if not current_hash:
         send_telegram("[{}] koFIU 페이지 조회에 실패했습니다. 잠시 후 다시 시도합니다.".format(today))
@@ -57,8 +69,8 @@ def main():
         message = (
             "[koFIU 모니터링 시작]\n"
             "시작일: {}\n"
-            "링크: {}"
-        ).format(today, TARGET_URL)
+            "모니터링 URL: {}"
+        ).format(today, used_url)
         send_telegram(message)
 
     elif current_hash != last_hash:
@@ -69,7 +81,7 @@ def main():
             "최근 개정 정보: {}\n\n"
             "링크: {}\n\n"
             "즉시 확인하여 시스템에 반영해 주세요!"
-        ).format(today, update_date, TARGET_URL)
+        ).format(today, update_date, used_url)
         send_telegram(message)
 
     else:
@@ -78,8 +90,12 @@ def main():
             "금융거래등 제한대상자 명단이 전일과 동일합니다.\n"
             "최근 개정 정보: {}\n\n"
             "링크: {}"
-        ).format(today, update_date, TARGET_URL)
+        ).format(today, update_date, used_url)
         send_telegram(message)
+
+    with open(HASH_FILE, "w") as f:
+        f.write(current_hash)
+
 
 if __name__ == "__main__":
     main()
