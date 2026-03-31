@@ -12,17 +12,7 @@ UN_XML_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
 UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list"
 
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
-
-LAW_API_BASE = "https://www.law.go.kr/DRF/lawSearch.do"
-LAW_API_PARAMS = {
-    "OC": "test",
-    "target": "admrul",
-    "type": "JSON",
-    "query": "금융정보분석원",
-    "display": "5",
-    "sort": "ddes"
-}
-LAW_VIEW_URL = "https://www.law.go.kr/admRulInfoP.do?admRulSeq={}"
+ANNOUNCE_HASH_URL = "https://www.kofiu.go.kr/cmn/file/downloadLaw.do"
 
 HASH_FILE = "last_hash.json"
 
@@ -79,45 +69,17 @@ def get_un_sanctions_info():
         return None, 0, 0, "확인 불가"
 
 
-def get_announce_info():
+def get_announce_hash():
     try:
-        print("국가법령정보 API 호출")
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(LAW_API_BASE, params=LAW_API_PARAMS, headers=headers, timeout=15)
-        print("법령 API 응답코드: {}".format(response.status_code))
-        print("법령 API 응답내용: {}".format(response.text[:500]))
-
+        print("공고/고시 변경 감지")
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
+        response = requests.get(ANNOUNCE_HASH_URL, headers=headers, timeout=10)
+        print("공고/고시 응답코드: {}".format(response.status_code))
         page_hash = hashlib.md5(response.text.encode()).hexdigest()
-        posts = []
-
-        data = response.json()
-        items = data.get("LawSearch", {}).get("law", [])
-        if isinstance(items, dict):
-            items = [items]
-
-        print("항목 수: {}".format(len(items) if isinstance(items, list) else "N/A"))
-
-        for item in items[:3]:
-            title = item.get("법령명한글", item.get("법령명", ""))
-            pub_date = item.get("공포일자", item.get("시행일자", ""))
-            seq = item.get("법령일련번호", "")
-
-            if pub_date and len(str(pub_date)) == 8:
-                pub_date = "{}.{}.{}".format(
-                    str(pub_date)[:4], str(pub_date)[4:6], str(pub_date)[6:8])
-
-            link = LAW_VIEW_URL.format(seq) if seq else ANNOUNCE_URL
-
-            if title:
-                posts.append({"title": title[:60], "date": str(pub_date), "link": link})
-
-        print("추출된 게시글: {}".format(posts))
-        latest_date = posts[0]["date"] if posts else "확인 불가"
-        return page_hash, posts, latest_date
-
+        return page_hash
     except Exception as e:
-        print("법령 API 오류: {}".format(e))
-        return None, [], "확인 불가"
+        print("공고/고시 오류: {}".format(e))
+        return None
 
 
 def send_telegram(message):
@@ -230,40 +192,30 @@ def main():
             )
 
     # ② 공고/고시/훈령/예규 모니터링
-    announce_hash, posts, latest_date = get_announce_info()
+    announce_hash = get_announce_hash()
 
     if announce_hash:
         new_data["announce_hash"] = announce_hash
         last_announce = last_data.get("announce_hash")
-        latest_post = posts[0] if posts else None
 
         if last_announce is None:
-            post_info = "게시글 확인 불가"
-            if latest_post:
-                post_info = "최신 게시글: {} ({})\n링크: {}".format(
-                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
-                "{}\n\n전체 목록: {}".format(post_info, ANNOUNCE_URL)
+                "변경 발생 시 즉시 알림을 드립니다.\n\n"
+                "전체 목록: {}".format(ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
-            post_info = "게시글 확인 불가"
-            if latest_post:
-                post_info = "업데이트 게시글: {} ({})\n링크: {}".format(
-                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
-                "[긴급] 공고/고시/훈령/예규 업데이트!\n\n"
-                "감지일: {}\n\n{}\n\n전체 목록: {}\n\n"
-                "즉시 확인해 주세요!".format(today_str, post_info, ANNOUNCE_URL)
+                "[긴급] 공고/고시/훈령/예규 변경 감지!\n\n"
+                "감지일: {}\n\n"
+                "새로운 공고/고시/훈령/예규가 등록되었습니다.\n\n"
+                "확인하기: {}\n\n"
+                "즉시 확인해 주세요!".format(today_str, ANNOUNCE_URL)
             )
         else:
-            post_info = "게시글 확인 불가"
-            if latest_post:
-                post_info = "최신 게시글: {} ({})\n링크: {}".format(
-                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
-                "[{}] 공고/고시/훈령/예규 변동없음\n\n{}\n\n"
-                "전체 목록: {}".format(today_str, post_info, ANNOUNCE_URL)
+                "[{}] 공고/고시/훈령/예규 변동없음\n\n"
+                "전체 목록: {}".format(today_str, ANNOUNCE_URL)
             )
 
     print("전송할 메시지 수: {}".format(len(messages)))
