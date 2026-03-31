@@ -1,4 +1,50 @@
-드")
+import requests
+import hashlib
+import os
+import json
+from datetime import datetime, date, timedelta
+import xml.etree.ElementTree as ET
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
+UN_XML_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
+UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list"
+
+ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
+
+LAW_API_BASE = "https://www.law.go.kr/DRF/lawSearch.do"
+LAW_API_PARAMS = {
+    "OC": "test",
+    "target": "admrul",
+    "type": "JSON",
+    "query": "금융정보분석원",
+    "display": "5",
+    "sort": "ddes"
+}
+LAW_VIEW_URL = "https://www.law.go.kr/admRulInfoP.do?admRulSeq={}"
+
+HASH_FILE = "last_hash.json"
+
+
+def get_business_days():
+    today = date.today()
+
+    def prev_biz(d, n):
+        while n > 0:
+            d -= timedelta(days=1)
+            if d.weekday() < 5:
+                n -= 1
+        return d
+
+    prev1 = prev_biz(today, 1)
+    prev2 = prev_biz(today, 2)
+    return prev1.strftime("%Y.%m.%d"), prev2.strftime("%Y.%m.%d")
+
+
+def get_un_sanctions_info():
+    try:
+        print("UN XML 다운로드")
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(UN_XML_URL, headers=headers, timeout=30)
         print("UN 응답코드: {}".format(response.status_code))
@@ -37,7 +83,7 @@ def get_announce_info():
     try:
         print("국가법령정보 API 호출")
         headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(LAW_API_URL, headers=headers, timeout=15)
+        response = requests.get(LAW_API_BASE, params=LAW_API_PARAMS, headers=headers, timeout=15)
         print("법령 API 응답코드: {}".format(response.status_code))
         print("법령 API 응답내용: {}".format(response.text[:500]))
 
@@ -49,21 +95,21 @@ def get_announce_info():
         if isinstance(items, dict):
             items = [items]
 
-        print("항목 수: {}".format(len(items)))
+        print("항목 수: {}".format(len(items) if isinstance(items, list) else "N/A"))
 
         for item in items[:3]:
             title = item.get("법령명한글", item.get("법령명", ""))
             pub_date = item.get("공포일자", item.get("시행일자", ""))
             seq = item.get("법령일련번호", "")
 
-            if pub_date and len(pub_date) == 8:
+            if pub_date and len(str(pub_date)) == 8:
                 pub_date = "{}.{}.{}".format(
-                    pub_date[:4], pub_date[4:6], pub_date[6:8])
+                    str(pub_date)[:4], str(pub_date)[4:6], str(pub_date)[6:8])
 
             link = LAW_VIEW_URL.format(seq) if seq else ANNOUNCE_URL
 
             if title:
-                posts.append({"title": title[:60], "date": pub_date, "link": link})
+                posts.append({"title": title[:60], "date": str(pub_date), "link": link})
 
         print("추출된 게시글: {}".format(posts))
         latest_date = posts[0]["date"] if posts else "확인 불가"
@@ -96,7 +142,7 @@ def load_data():
 
 def save_data(data):
     with open(HASH_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(data, f, ensure_ascii=False)
     print("데이터 저장 완료")
 
 
@@ -183,7 +229,7 @@ def main():
                 "출처: {}".format(today_str, un_info, UN_PAGE_URL)
             )
 
-    # ② 공고/고시/훈령/예규 모니터링 (국가법령정보 API)
+    # ② 공고/고시/훈령/예규 모니터링
     announce_hash, posts, latest_date = get_announce_info()
 
     if announce_hash:
