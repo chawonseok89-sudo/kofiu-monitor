@@ -13,23 +13,19 @@ UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated
 
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
 ANNOUNCE_HASH_URL = "https://www.kofiu.go.kr/cmn/file/downloadLaw.do"
+ANNOUNCE_API = "https://www.kofiu.go.kr/cmn/board/selectBoardListFile.do?ntcnYardOrdrNo=&page=1&seCd=0006&selScope=&size=3&subSech="
+ANNOUNCE_VIEW = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo={}&seCd=0006"
 
 HASH_FILE = "last_hash.json"
 
 
-def get_business_days():
+def get_prev_business_day():
     today = date.today()
-
-    def prev_biz(d, n):
-        while n > 0:
-            d -= timedelta(days=1)
-            if d.weekday() < 5:
-                n -= 1
-        return d
-
-    prev1 = prev_biz(today, 1)
-    prev2 = prev_biz(today, 2)
-    return prev1.strftime("%Y.%m.%d"), prev2.strftime("%Y.%m.%d")
+    d = today
+    while True:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            return d.strftime("%Y.%m.%d")
 
 
 def get_un_sanctions_info():
@@ -69,17 +65,47 @@ def get_un_sanctions_info():
         return None, 0, 0, "확인 불가"
 
 
-def get_announce_hash():
+def get_announce_info():
     try:
-        print("공고/고시 변경 감지")
+        print("공고/고시 정보 조회")
         headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
-        response = requests.get(ANNOUNCE_HASH_URL, headers=headers, timeout=10)
-        print("공고/고시 응답코드: {}".format(response.status_code))
-        page_hash = hashlib.md5(response.text.encode()).hexdigest()
-        return page_hash
+
+        hash_resp = requests.get(ANNOUNCE_HASH_URL, headers=headers, timeout=10)
+        page_hash = hashlib.md5(hash_resp.text.encode()).hexdigest()
+
+        api_resp = requests.get(ANNOUNCE_API, headers=headers, timeout=10)
+        print("API 응답코드: {}".format(api_resp.status_code))
+
+        posts = []
+        data = api_resp.json()
+        items = data.get("result", data.get("list", data.get("data", [])))
+
+        if isinstance(items, list):
+            for item in items[:3]:
+                title = item.get("ntcnYardSjNm", item.get("ntcnYardSj", ""))
+                date_val = item.get("ntcnYardRgiDt", item.get("ntcnYardChangeDt", ""))
+                order_no = item.get("ntcnYardOrdrNo", "")
+
+                if date_val and len(date_val) >= 10:
+                    date_val = date_val[:10].replace("-", ".")
+
+                try:
+                    if int(date_val[:4]) > 2030:
+                        continue
+                except:
+                    pass
+
+                link = ANNOUNCE_VIEW.format(order_no) if order_no else ANNOUNCE_URL
+                if title:
+                    posts.append({"title": title[:60], "date": date_val, "link": link})
+
+        posts.sort(key=lambda x: x.get("date", ""), reverse=True)
+        print("추출된 게시글: {}".format(posts))
+        return page_hash, posts
+
     except Exception as e:
         print("공고/고시 오류: {}".format(e))
-        return None
+        return None, []
 
 
 def send_telegram(message):
@@ -120,7 +146,7 @@ def diff_str(diff):
 def main():
     today_str = datetime.now().strftime("%Y년 %m월 %d일")
     today_key = datetime.now().strftime("%Y.%m.%d")
-    prev1_day, prev2_day = get_business_days()
+    prev_day = get_prev_business_day()
     print("=== koFIU 모니터링 시작 ({}) ===".format(today_str))
 
     last_data = load_data()
@@ -137,37 +163,25 @@ def main():
         new_data["un_history"] = history
 
         last_hash = last_data.get("un_hash")
-        prev1_data = history.get(prev1_day, {})
-        prev2_data = history.get(prev2_day, {})
+        prev_data = history.get(prev_day, {})
+        prev_person = prev_data.get("person", 0)
+        prev_entity = prev_data.get("entity", 0)
 
-        prev1_person = prev1_data.get("person", 0)
-        prev1_entity = prev1_data.get("entity", 0)
-        prev2_person = prev2_data.get("person", 0)
-        prev2_entity = prev2_data.get("entity", 0)
+        diff_p = person_count - prev_person if prev_person else 0
+        diff_e = entity_count - prev_entity if prev_entity else 0
 
-        diff1_p = person_count - prev1_person if prev1_person else 0
-        diff1_e = entity_count - prev1_entity if prev1_entity else 0
-        diff2_p = person_count - prev2_person if prev2_person else 0
-        diff2_e = entity_count - prev2_entity if prev2_entity else 0
-
-        if prev1_data:
-            prev1_line = "전일({}) 대비: 개인 {} / 단체 {}".format(
-                prev1_day, diff_str(diff1_p), diff_str(diff1_e))
+        if prev_data:
+            prev_line = "전일({}) 대비: 개인 {} / 단체 {}".format(
+                prev_day, diff_str(diff_p), diff_str(diff_e))
         else:
-            prev1_line = "전일({}) 대비: 데이터 누적 중 (내일부터 표시)".format(prev1_day)
-
-        if prev2_data:
-            prev2_line = "전전일({}) 대비: 개인 {} / 단체 {}".format(
-                prev2_day, diff_str(diff2_p), diff_str(diff2_e))
-        else:
-            prev2_line = "전전일({}) 대비: 데이터 누적 중 (모레부터 표시)".format(prev2_day)
+            prev_line = "전일({}) 대비: 데이터 누적 중 (내일부터 표시)".format(prev_day)
 
         un_info = (
             "[ UN 제재대상자 현황 ]\n"
             "개인: {}명 / 단체: {}개\n"
             "명단 기준일: {}\n\n"
-            "{}\n{}"
-        ).format(person_count, entity_count, generated_date, prev1_line, prev2_line)
+            "{}"
+        ).format(person_count, entity_count, generated_date, prev_line)
 
         if last_hash is None:
             messages.append(
@@ -175,7 +189,7 @@ def main():
                 "[ UN 제재대상자 현황 ]\n"
                 "개인: {}명 / 단체: {}개\n"
                 "명단 기준일: {}\n\n"
-                "* 전일/전전일 비교는 데이터 누적 후 표시됩니다\n\n"
+                "* 전일 비교는 데이터 누적 후 표시됩니다\n\n"
                 "출처: {}".format(person_count, entity_count, generated_date, UN_PAGE_URL)
             )
         elif un_hash != last_hash:
@@ -192,30 +206,38 @@ def main():
             )
 
     # ② 공고/고시/훈령/예규 모니터링
-    announce_hash = get_announce_hash()
+    announce_hash, posts = get_announce_info()
 
     if announce_hash:
         new_data["announce_hash"] = announce_hash
         last_announce = last_data.get("announce_hash")
+        latest_post = posts[0] if posts else None
+
+        if latest_post:
+            recent_info = "최근 게시글: {} ({})\n링크: {}".format(
+                latest_post["title"], latest_post["date"], latest_post["link"])
+        else:
+            recent_info = "최근 게시글: 확인 불가"
 
         if last_announce is None:
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
-                "변경 발생 시 즉시 알림을 드립니다.\n\n"
-                "전체 목록: {}".format(ANNOUNCE_URL)
+                "{}\n\n"
+                "전체 목록: {}".format(recent_info, ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 변경 감지!\n\n"
                 "감지일: {}\n\n"
-                "새로운 공고/고시/훈령/예규가 등록되었습니다.\n\n"
-                "확인하기: {}\n\n"
-                "즉시 확인해 주세요!".format(today_str, ANNOUNCE_URL)
+                "{}\n\n"
+                "전체 목록: {}\n\n"
+                "즉시 확인해 주세요!".format(today_str, recent_info, ANNOUNCE_URL)
             )
         else:
             messages.append(
                 "[{}] 공고/고시/훈령/예규 변동없음\n\n"
-                "전체 목록: {}".format(today_str, ANNOUNCE_URL)
+                "{}\n\n"
+                "전체 목록: {}".format(today_str, recent_info, ANNOUNCE_URL)
             )
 
     print("전송할 메시지 수: {}".format(len(messages)))
