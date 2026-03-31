@@ -1,43 +1,7 @@
-import requests
-import hashlib
-import os
-import json
-from datetime import datetime, date, timedelta
-import xml.etree.ElementTree as ET
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
-
-UN_XML_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
-UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list"
-
-ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
-ANNOUNCE_LATEST_URL = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo=83&seCd=LAW"
-ANNOUNCE_HASH_API = "https://www.kofiu.go.kr/cmn/file/downloadLaw.do"
-HASH_FILE = "last_hash.json"
-
-
-def get_business_days():
-    today = date.today()
-
-    def prev_biz(d, n):
-        while n > 0:
-            d -= timedelta(days=1)
-            if d.weekday() < 5:
-                n -= 1
-        return d
-
-    prev1 = prev_biz(today, 1)
-    prev2 = prev_biz(today, 2)
-    return prev1.strftime("%Y.%m.%d"), prev2.strftime("%Y.%m.%d")
-
-
-def get_un_sanctions_info():
-    try:
-        print("UN XML 다운로드")
+드")
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(UN_XML_URL, headers=headers, timeout=30)
-        print("응답코드: {}".format(response.status_code))
+        print("UN 응답코드: {}".format(response.status_code))
 
         page_hash = hashlib.md5(response.content).hexdigest()
         root = ET.fromstring(response.content)
@@ -69,30 +33,45 @@ def get_un_sanctions_info():
         return None, 0, 0, "확인 불가"
 
 
-def get_announce_info(last_data):
+def get_announce_info():
     try:
-        print("공고/고시 변경 감지")
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
-
-        response = requests.get(ANNOUNCE_HASH_API, headers=headers, timeout=10)
-        print("응답코드: {}".format(response.status_code))
-        print("응답내용: {}".format(response.text[:300]))
+        print("국가법령정보 API 호출")
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(LAW_API_URL, headers=headers, timeout=15)
+        print("법령 API 응답코드: {}".format(response.status_code))
+        print("법령 API 응답내용: {}".format(response.text[:500]))
 
         page_hash = hashlib.md5(response.text.encode()).hexdigest()
+        posts = []
 
-        saved_post = last_data.get("announce_latest_post", {})
-        if not saved_post:
-            saved_post = {
-                "title": "특정 금융거래정보 보고 등에 관한 검사 및 제재규정 일부개정규정",
-                "date": "2026.02.19",
-                "link": ANNOUNCE_LATEST_URL
-            }
+        data = response.json()
+        items = data.get("LawSearch", {}).get("law", [])
+        if isinstance(items, dict):
+            items = [items]
 
-        return page_hash, saved_post
+        print("항목 수: {}".format(len(items)))
+
+        for item in items[:3]:
+            title = item.get("법령명한글", item.get("법령명", ""))
+            pub_date = item.get("공포일자", item.get("시행일자", ""))
+            seq = item.get("법령일련번호", "")
+
+            if pub_date and len(pub_date) == 8:
+                pub_date = "{}.{}.{}".format(
+                    pub_date[:4], pub_date[4:6], pub_date[6:8])
+
+            link = LAW_VIEW_URL.format(seq) if seq else ANNOUNCE_URL
+
+            if title:
+                posts.append({"title": title[:60], "date": pub_date, "link": link})
+
+        print("추출된 게시글: {}".format(posts))
+        latest_date = posts[0]["date"] if posts else "확인 불가"
+        return page_hash, posts, latest_date
 
     except Exception as e:
-        print("공고/고시 오류: {}".format(e))
-        return None, {}
+        print("법령 API 오류: {}".format(e))
+        return None, [], "확인 불가"
 
 
 def send_telegram(message):
@@ -108,7 +87,7 @@ def load_data():
     try:
         with open(HASH_FILE, "r") as f:
             data = json.load(f)
-            print("저장된 데이터: {}".format(list(data.keys())))
+            print("저장된 데이터 키: {}".format(list(data.keys())))
             return data
     except FileNotFoundError:
         print("저장 파일 없음 - 최초 실행")
@@ -204,33 +183,38 @@ def main():
                 "출처: {}".format(today_str, un_info, UN_PAGE_URL)
             )
 
-    # ② 공고/고시/훈령/예규 모니터링
-    announce_hash, latest_post = get_announce_info(last_data)
+    # ② 공고/고시/훈령/예규 모니터링 (국가법령정보 API)
+    announce_hash, posts, latest_date = get_announce_info()
 
     if announce_hash:
         new_data["announce_hash"] = announce_hash
-        new_data["announce_latest_post"] = latest_post
         last_announce = last_data.get("announce_hash")
-
-        post_info = "게시글 확인 불가"
-        if latest_post:
-            post_info = "최신 게시글: {} ({})\n링크: {}".format(
-                latest_post.get("title", ""),
-                latest_post.get("date", ""),
-                latest_post.get("link", ANNOUNCE_URL))
+        latest_post = posts[0] if posts else None
 
         if last_announce is None:
+            post_info = "게시글 확인 불가"
+            if latest_post:
+                post_info = "최신 게시글: {} ({})\n링크: {}".format(
+                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
                 "{}\n\n전체 목록: {}".format(post_info, ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
+            post_info = "게시글 확인 불가"
+            if latest_post:
+                post_info = "업데이트 게시글: {} ({})\n링크: {}".format(
+                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 업데이트!\n\n"
                 "감지일: {}\n\n{}\n\n전체 목록: {}\n\n"
                 "즉시 확인해 주세요!".format(today_str, post_info, ANNOUNCE_URL)
             )
         else:
+            post_info = "게시글 확인 불가"
+            if latest_post:
+                post_info = "최신 게시글: {} ({})\n링크: {}".format(
+                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[{}] 공고/고시/훈령/예규 변동없음\n\n{}\n\n"
                 "전체 목록: {}".format(today_str, post_info, ANNOUNCE_URL)
