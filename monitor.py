@@ -11,13 +11,14 @@ CHAT_ID = os.environ.get("CHAT_ID")
 
 LIMIT_URL = "https://www.kofiu.go.kr/kor/policy/ptfps02_1.do"
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
-ANNOUNCE_API = "https://www.kofiu.go.kr/cmn/board/selectBoardListFile.do?seCd=0003&page=1&size=3&selScope=&subSech="
+ANNOUNCE_API = "https://www.kofiu.go.kr/cmn/board/selectBoardListFile.do?ntcnYardOrdrNo=&page=1&seCd=0003&selScope=&size=3&subSech="
+ANNOUNCE_VIEW = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo={}&seCd=0003"
 HASH_FILE = "last_hash.json"
 
 
 def get_limit_info(url):
     try:
-        print("제한대상자 페이지 접속 시도")
+        print("제한대상자 페이지 접속")
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=10)
         print("응답코드: {}".format(response.status_code))
@@ -33,93 +34,64 @@ def get_limit_info(url):
                 update_date = t
                 break
 
-        un_1267 = un_1718 = un_1988 = un_1737 = un_total = "확인 불가"
+        person_total = "확인 불가"
+        group_total = "확인 불가"
+
         tables = soup.find_all("table")
         for table in tables:
             rows = table.find_all("tr")
             for row in rows:
                 cells = row.find_all(["td", "th"])
                 row_text = " ".join([c.get_text(strip=True) for c in cells])
-                if "1267" in row_text:
-                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
-                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
-                    if counts:
-                        un_1267 = counts[-1]
-                if "1718" in row_text:
-                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
-                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
-                    if counts:
-                        un_1718 = counts[-1]
-                if "1988" in row_text and "1267" not in row_text:
-                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
-                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
-                    if counts:
-                        un_1988 = counts[-1]
-                if "1737" in row_text:
-                    nums = re.findall(r"\b(\d{1,4})\b", row_text)
-                    counts = [n for n in nums if not (2000 <= int(n) <= 2099) and n not in ["1267","1718","1988","1737","2253","2231"]]
-                    if counts:
-                        un_1737 = counts[-1]
-                if "합계" in row_text or "총계" in row_text:
-                    nums = re.findall(r"\b(\d+)\b", row_text)
-                    counts = [n for n in nums if not (2000 <= int(n) <= 2099)]
-                    if counts:
-                        un_total = counts[-1]
+                if ("합계" in row_text or "총계" in row_text) and len(cells) >= 3:
+                    nums = []
+                    for cell in cells:
+                        t = cell.get_text(strip=True)
+                        if re.match(r"^\d+$", t) and not (2000 <= int(t) <= 2099):
+                            nums.append(t)
+                    if len(nums) >= 2:
+                        person_total = nums[0]
+                        group_total = nums[1]
+                    elif len(nums) == 1:
+                        person_total = nums[0]
 
-        return page_hash, update_date, un_1267, un_1718, un_1988, un_1737, un_total
+        print("개인:{} 단체:{}".format(person_total, group_total))
+        return page_hash, update_date, person_total, group_total
     except Exception as e:
         print("제한대상자 페이지 오류: {}".format(e))
-        return None, None, None, None, None, None, None
+        return None, None, None, None
 
 
 def get_announce_info():
     try:
-        print("공고/고시 API 호출 시도")
+        print("공고/고시 API 호출")
         headers = {
             "User-Agent": "Mozilla/5.0",
-            "Referer": "https://www.kofiu.go.kr/kor/law/announce_list.do"
+            "Referer": ANNOUNCE_URL
         }
         response = requests.get(ANNOUNCE_API, headers=headers, timeout=10)
-        print("API 응답코드: {}".format(response.status_code))
-        print("API 응답 앞부분: {}".format(response.text[:300]))
+        print("응답코드: {}".format(response.status_code))
+        print("응답내용: {}".format(response.text[:200]))
 
-        posts = []
-        latest_date = "확인 불가"
         page_hash = hashlib.md5(response.text.encode()).hexdigest()
+        posts = []
 
-        try:
-            data = response.json()
-            items = data.get("list", data.get("data", data.get("result", [])))
-            if isinstance(items, list):
-                for item in items[:3]:
-                    title = item.get("ntcnYardSj", item.get("title", item.get("sj", "")))
-                    date = item.get("ntcnYardRgiDt", item.get("date", item.get("regDt", "")))
-                    if date:
-                        date = date[:10].replace("-", ".")
-                    if title:
-                        posts.append({"title": title[:50], "date": date})
-        except Exception as je:
-            print("JSON 파싱 실패, HTML로 시도: {}".format(je))
-            soup = BeautifulSoup(response.text, "html.parser")
-            rows = soup.select("tr")
-            for row in rows[:3]:
-                cells = row.find_all("td")
-                if len(cells) >= 2:
-                    title = ""
-                    date = ""
-                    for cell in cells:
-                        txt = cell.get_text(strip=True)
-                        if len(txt) > len(title) and not txt.isdigit() and len(txt) > 3:
-                            title = txt
-                        if re.search(r"\d{4}[.\-]\d{2}[.\-]\d{2}", txt):
-                            date = txt
-                    if title:
-                        posts.append({"title": title[:50], "date": date})
+        data = response.json()
+        items = data.get("result", data.get("list", data.get("data", [])))
 
-        if posts:
-            latest_date = posts[0]["date"] if posts[0]["date"] else "확인 불가"
+        if isinstance(items, list):
+            for item in items[:3]:
+                title = item.get("ntcnYardSjNm", item.get("ntcnYardSj", ""))
+                date = item.get("ntcnYardRgiDt", item.get("ntcnYardChangeDt", ""))
+                order_no = item.get("ntcnYardOrdrNo", "")
+                if date:
+                    date = date[:10].replace("-", ".")
+                link = ANNOUNCE_VIEW.format(order_no) if order_no else ANNOUNCE_URL
+                if title:
+                    posts.append({"title": title[:50], "date": date, "link": link})
 
         print("추출된 게시글: {}".format(posts))
+        latest_date = posts[0]["date"] if posts else "확인 불가"
         return page_hash, posts, latest_date
     except Exception as e:
         print("공고/고시 오류: {}".format(e))
@@ -132,7 +104,7 @@ def send_telegram(message):
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     response = requests.post(url, data=data)
     print("텔레그램 응답코드: {}".format(response.status_code))
-    print("텔레그램 응답: {}".format(response.text[:200]))
+    print("텔레그램 응답: {}".format(response.text[:300]))
 
 
 def load_hashes():
@@ -161,8 +133,7 @@ def main():
     messages = []
 
     # ① 금융거래등제한대상자 명단 모니터링
-    result = get_limit_info(LIMIT_URL)
-    limit_hash, limit_date, un_1267, un_1718, un_1988, un_1737, un_total = result
+    limit_hash, limit_date, person_total, group_total = get_limit_info(LIMIT_URL)
 
     if limit_hash:
         new_hashes["limit"] = limit_hash
@@ -170,12 +141,8 @@ def main():
 
         un_info = (
             "[ UN 제재대상자 현황 ]\n"
-            "1267호 (ISIL/Al-Qaida): {}명\n"
-            "1718호 (북한 DPRK)    : {}명\n"
-            "1988호 (탈레반)       : {}명\n"
-            "1737호 (이란)         : {}명\n"
-            "총계                  : {}명"
-        ).format(un_1267, un_1718, un_1988, un_1737, un_total)
+            "개인: {}명 / 단체: {}개"
+        ).format(person_total, group_total)
 
         if last_limit is None:
             messages.append(
@@ -195,7 +162,7 @@ def main():
             )
         else:
             messages.append(
-                "[{}] 금융거래등제한대상자 명단 변경없음\n\n"
+                "[{}] 금융거래등제한대상자 명단 변동없음\n\n"
                 "{}\n\n"
                 "최근 업데이트: {}\n"
                 "링크: {}".format(today, un_info, limit_date, LIMIT_URL)
@@ -207,40 +174,39 @@ def main():
     if announce_hash:
         new_hashes["announce"] = announce_hash
         last_announce = last_hashes.get("announce")
-
-        post_lines = ""
-        for i, p in enumerate(posts, 1):
-            if p["date"]:
-                post_lines += "{}. {} ({})\n".format(i, p["title"], p["date"])
-            else:
-                post_lines += "{}. {}\n".format(i, p["title"])
-
-        if not post_lines:
-            post_lines = "게시글 확인 불가\n"
+        latest_post = posts[0] if posts else None
 
         if last_announce is None:
+            post_info = ""
+            if latest_post:
+                post_info = "최신 게시글: {}\n링크: {}".format(
+                    latest_post["title"], latest_post["link"])
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
-                "[ 최근 게시글 ]\n"
-                "{}\n"
-                "링크: {}".format(post_lines, ANNOUNCE_URL)
+                "{}\n\n"
+                "전체 목록: {}".format(post_info, ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
+            post_info = ""
+            if latest_post:
+                post_info = "업데이트 게시글: {} ({})\n링크: {}".format(
+                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 업데이트!\n\n"
                 "감지일: {}\n\n"
-                "[ 변경된 최근 게시글 ]\n"
-                "{}\n"
-                "링크: {}\n\n"
-                "즉시 확인해 주세요!".format(today, post_lines, ANNOUNCE_URL)
+                "{}\n\n"
+                "전체 목록: {}\n\n"
+                "즉시 확인해 주세요!".format(today, post_info, ANNOUNCE_URL)
             )
         else:
+            post_info = ""
+            if latest_post:
+                post_info = "최신 게시글: {} ({})\n링크: {}".format(
+                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
-                "[{}] 공고/고시/훈령/예규 변동없음\n"
-                "(최근게시글 {})\n\n"
-                "[ 최근 게시글 ]\n"
-                "{}\n"
-                "링크: {}".format(today, latest_date, post_lines, ANNOUNCE_URL)
+                "[{}] 공고/고시/훈령/예규 변동없음\n\n"
+                "{}\n\n"
+                "전체 목록: {}".format(today, post_info, ANNOUNCE_URL)
             )
 
     print("전송할 메시지 수: {}".format(len(messages)))
