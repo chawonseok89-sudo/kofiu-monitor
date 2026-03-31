@@ -12,9 +12,6 @@ UN_XML_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
 UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list"
 
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
-ANNOUNCE_SEC_CODES = ["0001","0002","0003","0004","0005","0006","0007","0008","0009","0010","0011","0012","0013","0014","0015"]
-ANNOUNCE_API_BASE = "https://www.kofiu.go.kr/cmn/board/selectBoardListFile.do?ntcnYardOrdrNo=&page=1&size=5&selScope=&subSech=&seCd={}"
-ANNOUNCE_VIEW_BASE = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo={}&seCd={}"
 HASH_FILE = "last_hash.json"
 
 
@@ -36,9 +33,8 @@ def get_business_days():
 def is_valid_date(date_str):
     if not date_str:
         return False
-    year = date_str[:4]
     try:
-        y = int(year)
+        y = int(date_str[:4])
         return 2020 <= y <= 2030
     except:
         return False
@@ -83,56 +79,64 @@ def get_un_sanctions_info():
 
 def get_announce_info():
     try:
-        headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
-        best_posts = []
-        best_date = ""
-        best_hash = None
-        best_seCd = "0006"
+        import re
+        from bs4 import BeautifulSoup
+        print("공고/고시 페이지 직접 파싱")
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": ANNOUNCE_URL
+        }
 
-        for seCd in ANNOUNCE_SEC_CODES:
-            try:
-                url = ANNOUNCE_API_BASE.format(seCd)
-                response = requests.get(url, headers=headers, timeout=10)
-                if response.status_code != 200:
-                    continue
+        response = requests.get(ANNOUNCE_URL, headers=headers, timeout=10)
+        print("응답코드: {}".format(response.status_code))
+        print("응답내용 앞부분: {}".format(response.text[:500]))
 
-                data = response.json()
-                items = data.get("result", data.get("list", data.get("data", [])))
-                if not isinstance(items, list) or len(items) == 0:
-                    continue
+        page_hash = hashlib.md5(response.text.encode()).hexdigest()
+        soup = BeautifulSoup(response.text, "html.parser")
 
-                posts = []
-                for item in items:
-                    title = item.get("ntcnYardSjNm", item.get("ntcnYardSj", ""))
-                    date_val = item.get("ntcnYardRgiDt", item.get("ntcnYardChangeDt", ""))
-                    order_no = item.get("ntcnYardOrdrNo", "")
-                    if date_val:
-                        date_val = date_val[:10].replace("-", ".")
-                    if not is_valid_date(date_val):
-                        continue
-                    link = ANNOUNCE_VIEW_BASE.format(order_no, seCd) if order_no else ANNOUNCE_URL
-                    if title:
-                        posts.append({"title": title[:60], "date": date_val, "link": link})
+        posts = []
 
-                posts.sort(key=lambda x: x["date"], reverse=True)
+        rows = soup.select("table tbody tr, .board-list tr, .list tr")
+        print("rows 수: {}".format(len(rows)))
+        for row in rows[:5]:
+            cells = row.find_all("td")
+            if len(cells) >= 2:
+                title = ""
+                date_val = ""
+                link = ANNOUNCE_URL
+                for cell in cells:
+                    txt = cell.get_text(strip=True)
+                    a_tag = cell.find("a")
+                    if a_tag and len(txt) > 5 and not txt.isdigit():
+                        title = txt[:60]
+                        href = a_tag.get("href", "")
+                        if href:
+                            if href.startswith("http"):
+                                link = href
+                            else:
+                                link = "https://www.kofiu.go.kr" + href
+                    if re.search(r"\d{4}[-./]\d{2}[-./]\d{2}", txt):
+                        date_val = re.search(r"\d{4}[-./]\d{2}[-./]\d{2}", txt).group()
+                        date_val = date_val.replace("-", ".").replace("/", ".")
+                if title and is_valid_date(date_val):
+                    posts.append({"title": title, "date": date_val, "link": link})
 
-                if posts:
-                    latest = posts[0]["date"]
-                    print("seCd={} | {} ({})".format(seCd, posts[0]["title"][:25], latest))
-                    if latest > best_date:
-                        best_date = latest
-                        best_posts = posts[:3]
-                        best_hash = hashlib.md5(response.text.encode()).hexdigest()
-                        best_seCd = seCd
+        if not posts:
+            links = soup.find_all("a", href=True)
+            for a in links:
+                href = a.get("href", "")
+                txt = a.get_text(strip=True)
+                if "announce_view" in href and len(txt) > 5:
+                    full_link = "https://www.kofiu.go.kr" + href if not href.startswith("http") else href
+                    posts.append({"title": txt[:60], "date": "", "link": full_link})
+                if len(posts) >= 5:
+                    break
 
-            except Exception as e:
-                print("seCd={} 오류: {}".format(seCd, e))
+        posts.sort(key=lambda x: x.get("date", ""), reverse=True)
+        print("추출된 게시글: {}".format(posts[:3]))
 
-        print("최종 선택 seCd={} 최신날짜={}".format(best_seCd, best_date))
-        if best_hash is None:
-            best_hash = hashlib.md5("no_data".encode()).hexdigest()
-
-        return best_hash, best_posts, best_date if best_date else "확인 불가"
+        latest_date = posts[0]["date"] if posts and posts[0]["date"] else "확인 불가"
+        return page_hash, posts[:3], latest_date
 
     except Exception as e:
         print("공고/고시 오류: {}".format(e))
