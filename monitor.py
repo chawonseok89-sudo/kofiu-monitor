@@ -1,6 +1,4 @@
-문법 검사 완료! 전체 코드예요 😊
-
-pythonimport requests
+import requests
 import hashlib
 import os
 import json
@@ -48,7 +46,7 @@ def is_valid_date(date_str):
 
 def get_un_sanctions_info():
     try:
-        print("UN 제재 XML 다운로드")
+        print("UN XML 다운로드")
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(UN_XML_URL, headers=headers, timeout=30)
         print("응답코드: {}".format(response.status_code))
@@ -208,13 +206,17 @@ def main():
         diff2_p = person_count - prev2_person if prev2_person else 0
         diff2_e = entity_count - prev2_entity if prev2_entity else 0
 
-        prev1_line = "전일({}) 대비: 개인 {} / 단체 {}".format(
-            prev1_day, diff_str(diff1_p), diff_str(diff1_e)) if prev1_data else \
-            "전일({}) 대비: 데이터 누적 중 (내일부터 표시)".format(prev1_day)
+        if prev1_data:
+            prev1_line = "전일({}) 대비: 개인 {} / 단체 {}".format(
+                prev1_day, diff_str(diff1_p), diff_str(diff1_e))
+        else:
+            prev1_line = "전일({}) 대비: 데이터 누적 중 (내일부터 표시)".format(prev1_day)
 
-        prev2_line = "전전일({}) 대비: 개인 {} / 단체 {}".format(
-            prev2_day, diff_str(diff2_p), diff_str(diff2_e)) if prev2_data else \
-            "전전일({}) 대비: 데이터 누적 중 (모레부터 표시)".format(prev2_day)
+        if prev2_data:
+            prev2_line = "전전일({}) 대비: 개인 {} / 단체 {}".format(
+                prev2_day, diff_str(diff2_p), diff_str(diff2_e))
+        else:
+            prev2_line = "전전일({}) 대비: 데이터 누적 중 (모레부터 표시)".format(prev2_day)
 
         un_info = (
             "[ UN 제재대상자 현황 ]\n"
@@ -231,7 +233,7 @@ def main():
                 "명단 기준일: {}\n\n"
                 "* 전일/전전일 비교는 데이터 누적 후 표시됩니다\n\n"
                 "출처: {}".format(person_count, entity_count, generated_date, UN_PAGE_URL)
-        )
+            )
         elif un_hash != last_hash:
             messages.append(
                 "[긴급] UN 제재대상자 명단 변경 감지!\n\n"
@@ -268,8 +270,8 @@ def main():
                     latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 업데이트!\n\n"
-                "감지일: {}\n\n{}\n\n전체 목록: {}\n\n즉시 확인해 주세요!".format(
-                    today_str, post_info, ANNOUNCE_URL)
+                "감지일: {}\n\n{}\n\n전체 목록: {}\n\n"
+                "즉시 확인해 주세요!".format(today_str, post_info, ANNOUNCE_URL)
             )
         else:
             post_info = "게시글 확인 불가"
@@ -277,8 +279,8 @@ def main():
                 post_info = "최신 게시글: {} ({})\n링크: {}".format(
                     latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
-                "[{}] 공고/고시/훈령/예규 변동없음\n\n{}\n\n전체 목록: {}".format(
-                    today_str, post_info, ANNOUNCE_URL)
+                "[{}] 공고/고시/훈령/예규 변동없음\n\n{}\n\n"
+                "전체 목록: {}".format(today_str, post_info, ANNOUNCE_URL)
             )
 
     print("전송할 메시지 수: {}".format(len(messages)))
