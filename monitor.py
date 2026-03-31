@@ -4,7 +4,7 @@ import hashlib
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import xml.etree.ElementTree as ET
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -19,6 +19,17 @@ ANNOUNCE_VIEW = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo
 HASH_FILE = "last_hash.json"
 
 
+def get_prev_business_day():
+    today = date.today()
+    offset = 1
+    if today.weekday() == 0:  # 월요일 → 금요일
+        offset = 3
+    elif today.weekday() == 6:  # 일요일 → 금요일
+        offset = 2
+    prev = today - timedelta(days=offset)
+    return prev.strftime("%Y.%m.%d")
+
+
 def get_un_sanctions_info():
     try:
         print("UN 제재 XML 다운로드 시도")
@@ -27,9 +38,7 @@ def get_un_sanctions_info():
         print("UN XML 응답코드: {}".format(response.status_code))
 
         page_hash = hashlib.md5(response.content).hexdigest()
-
         root = ET.fromstring(response.content)
-        print("XML 루트 태그: {}".format(root.tag))
 
         person_count = 0
         entity_count = 0
@@ -41,17 +50,14 @@ def get_un_sanctions_info():
 
         for child in root:
             tag = child.tag.upper()
-            print("섹션: {}".format(tag))
             if "INDIVIDUAL" in tag:
                 person_count = len(child.findall("./INDIVIDUAL") or list(child))
             elif "ENTITY" in tag or "ENTITIES" in tag:
                 entity_count = len(child.findall("./ENTITY") or list(child))
 
         if person_count == 0 and entity_count == 0:
-            individuals = root.findall(".//INDIVIDUAL")
-            entities = root.findall(".//ENTITY")
-            person_count = len(individuals)
-            entity_count = len(entities)
+            person_count = len(root.findall(".//INDIVIDUAL"))
+            entity_count = len(root.findall(".//ENTITY"))
 
         print("개인:{} 단체:{} 날짜:{}".format(person_count, entity_count, generated_date))
         return page_hash, person_count, entity_count, generated_date
@@ -64,10 +70,7 @@ def get_un_sanctions_info():
 def get_announce_info():
     try:
         print("공고/고시 API 호출")
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": ANNOUNCE_URL
-        }
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
         response = requests.get(ANNOUNCE_API, headers=headers, timeout=10)
         print("응답코드: {}".format(response.status_code))
 
@@ -80,13 +83,13 @@ def get_announce_info():
         if isinstance(items, list):
             for item in items[:3]:
                 title = item.get("ntcnYardSjNm", item.get("ntcnYardSj", ""))
-                date = item.get("ntcnYardRgiDt", item.get("ntcnYardChangeDt", ""))
+                date_val = item.get("ntcnYardRgiDt", item.get("ntcnYardChangeDt", ""))
                 order_no = item.get("ntcnYardOrdrNo", "")
-                if date:
-                    date = date[:10].replace("-", ".")
+                if date_val:
+                    date_val = date_val[:10].replace("-", ".")
                 link = ANNOUNCE_VIEW.format(order_no) if order_no else ANNOUNCE_URL
                 if title:
-                    posts.append({"title": title[:60], "date": date, "link": link})
+                    posts.append({"title": title[:60], "date": date_val, "link": link})
 
         print("추출된 게시글: {}".format(posts))
         latest_date = posts[0]["date"] if posts else "확인 불가"
@@ -105,51 +108,75 @@ def send_telegram(message):
     print("텔레그램 응답: {}".format(response.text[:200]))
 
 
-def load_hashes():
+def load_data():
     try:
         with open(HASH_FILE, "r") as f:
             data = json.load(f)
-            print("저장된 해시: {}".format(data))
+            print("저장된 데이터: {}".format(data))
             return data
     except FileNotFoundError:
-        print("해시 파일 없음 - 최초 실행")
+        print("저장 파일 없음 - 최초 실행")
         return {}
 
 
-def save_hashes(hashes):
+def save_data(data):
     with open(HASH_FILE, "w") as f:
-        json.dump(hashes, f)
-    print("해시 저장 완료")
+        json.dump(data, f)
+    print("데이터 저장 완료")
 
 
 def main():
     today = datetime.now().strftime("%Y년 %m월 %d일")
+    prev_biz_day = get_prev_business_day()
     print("=== koFIU 모니터링 시작 ({}) ===".format(today))
 
-    last_hashes = load_hashes()
-    new_hashes = {}
+    last_data = load_data()
+    new_data = {}
     messages = []
 
     # ① UN 제재 명단 모니터링
     un_hash, person_count, entity_count, generated_date = get_un_sanctions_info()
 
     if un_hash:
-        new_hashes["un"] = un_hash
-        last_un = last_hashes.get("un")
+        new_data["un_hash"] = un_hash
+        new_data["un_person"] = person_count
+        new_data["un_entity"] = entity_count
+
+        last_hash = last_data.get("un_hash")
+        last_person = last_data.get("un_person", 0)
+        last_entity = last_data.get("un_entity", 0)
+
+        person_diff = person_count - last_person
+        entity_diff = entity_count - last_entity
+
+        def diff_str(diff):
+            if diff > 0:
+                return "(+{})".format(diff)
+            elif diff < 0:
+                return "({})".format(diff)
+            else:
+                return "(변동없음)"
 
         un_info = (
             "[ UN 제재대상자 현황 ]\n"
-            "개인: {}명 / 단체: {}개\n"
-            "명단 기준일: {}"
-        ).format(person_count, entity_count, generated_date)
+            "개인: {}명 {} / 단체: {}개 {}\n"
+            "명단 기준일: {}\n"
+            "전 영업일({}) 대비"
+        ).format(
+            person_count, diff_str(person_diff),
+            entity_count, diff_str(entity_diff),
+            generated_date, prev_biz_day
+        )
 
-        if last_un is None:
+        if last_hash is None:
             messages.append(
                 "[koFIU 금융거래등제한대상자 모니터링 시작]\n\n"
-                "{}\n\n"
-                "출처: {}".format(un_info, UN_PAGE_URL)
+                "[ UN 제재대상자 현황 ]\n"
+                "개인: {}명 / 단체: {}개\n"
+                "명단 기준일: {}\n\n"
+                "출처: {}".format(person_count, entity_count, generated_date, UN_PAGE_URL)
             )
-        elif un_hash != last_un:
+        elif un_hash != last_hash:
             messages.append(
                 "[긴급] UN 제재대상자 명단 변경 감지!\n\n"
                 "감지일: {}\n\n"
@@ -168,8 +195,8 @@ def main():
     announce_hash, posts, latest_date = get_announce_info()
 
     if announce_hash:
-        new_hashes["announce"] = announce_hash
-        last_announce = last_hashes.get("announce")
+        new_data["announce_hash"] = announce_hash
+        last_announce = last_data.get("announce_hash")
         latest_post = posts[0] if posts else None
 
         if last_announce is None:
@@ -211,10 +238,10 @@ def main():
         full_message = "\n\n========================================\n\n".join(messages)
         send_telegram(full_message)
 
-    if new_hashes:
-        merged = last_hashes.copy()
-        merged.update(new_hashes)
-        save_hashes(merged)
+    if new_data:
+        merged = last_data.copy()
+        merged.update(new_data)
+        save_data(merged)
 
     print("=== 모니터링 완료 ===")
 
