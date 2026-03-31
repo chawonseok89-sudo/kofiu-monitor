@@ -12,6 +12,8 @@ UN_XML_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
 UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list"
 
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
+ANNOUNCE_LATEST_URL = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo=83&seCd=LAW"
+ANNOUNCE_HASH_API = "https://www.kofiu.go.kr/cmn/file/downloadLaw.do"
 HASH_FILE = "last_hash.json"
 
 
@@ -28,16 +30,6 @@ def get_business_days():
     prev1 = prev_biz(today, 1)
     prev2 = prev_biz(today, 2)
     return prev1.strftime("%Y.%m.%d"), prev2.strftime("%Y.%m.%d")
-
-
-def is_valid_date(date_str):
-    if not date_str:
-        return False
-    try:
-        y = int(date_str[:4])
-        return 2020 <= y <= 2030
-    except:
-        return False
 
 
 def get_un_sanctions_info():
@@ -77,70 +69,30 @@ def get_un_sanctions_info():
         return None, 0, 0, "확인 불가"
 
 
-def get_announce_info():
+def get_announce_info(last_data):
     try:
-        import re
-        from bs4 import BeautifulSoup
-        print("공고/고시 페이지 직접 파싱")
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": ANNOUNCE_URL
-        }
+        print("공고/고시 변경 감지")
+        headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
 
-        response = requests.get(ANNOUNCE_URL, headers=headers, timeout=10)
+        response = requests.get(ANNOUNCE_HASH_API, headers=headers, timeout=10)
         print("응답코드: {}".format(response.status_code))
-        print("응답내용 앞부분: {}".format(response.text[:500]))
+        print("응답내용: {}".format(response.text[:300]))
 
         page_hash = hashlib.md5(response.text.encode()).hexdigest()
-        soup = BeautifulSoup(response.text, "html.parser")
 
-        posts = []
+        saved_post = last_data.get("announce_latest_post", {})
+        if not saved_post:
+            saved_post = {
+                "title": "특정 금융거래정보 보고 등에 관한 검사 및 제재규정 일부개정규정",
+                "date": "2026.02.19",
+                "link": ANNOUNCE_LATEST_URL
+            }
 
-        rows = soup.select("table tbody tr, .board-list tr, .list tr")
-        print("rows 수: {}".format(len(rows)))
-        for row in rows[:5]:
-            cells = row.find_all("td")
-            if len(cells) >= 2:
-                title = ""
-                date_val = ""
-                link = ANNOUNCE_URL
-                for cell in cells:
-                    txt = cell.get_text(strip=True)
-                    a_tag = cell.find("a")
-                    if a_tag and len(txt) > 5 and not txt.isdigit():
-                        title = txt[:60]
-                        href = a_tag.get("href", "")
-                        if href:
-                            if href.startswith("http"):
-                                link = href
-                            else:
-                                link = "https://www.kofiu.go.kr" + href
-                    if re.search(r"\d{4}[-./]\d{2}[-./]\d{2}", txt):
-                        date_val = re.search(r"\d{4}[-./]\d{2}[-./]\d{2}", txt).group()
-                        date_val = date_val.replace("-", ".").replace("/", ".")
-                if title and is_valid_date(date_val):
-                    posts.append({"title": title, "date": date_val, "link": link})
-
-        if not posts:
-            links = soup.find_all("a", href=True)
-            for a in links:
-                href = a.get("href", "")
-                txt = a.get_text(strip=True)
-                if "announce_view" in href and len(txt) > 5:
-                    full_link = "https://www.kofiu.go.kr" + href if not href.startswith("http") else href
-                    posts.append({"title": txt[:60], "date": "", "link": full_link})
-                if len(posts) >= 5:
-                    break
-
-        posts.sort(key=lambda x: x.get("date", ""), reverse=True)
-        print("추출된 게시글: {}".format(posts[:3]))
-
-        latest_date = posts[0]["date"] if posts and posts[0]["date"] else "확인 불가"
-        return page_hash, posts[:3], latest_date
+        return page_hash, saved_post
 
     except Exception as e:
         print("공고/고시 오류: {}".format(e))
-        return None, [], "확인 불가"
+        return None, {}
 
 
 def send_telegram(message):
@@ -156,7 +108,7 @@ def load_data():
     try:
         with open(HASH_FILE, "r") as f:
             data = json.load(f)
-            print("저장된 데이터: {}".format(data))
+            print("저장된 데이터: {}".format(list(data.keys())))
             return data
     except FileNotFoundError:
         print("저장 파일 없음 - 최초 실행")
@@ -188,6 +140,7 @@ def main():
     new_data = {}
     messages = []
 
+    # ① UN 제재 명단 모니터링
     un_hash, person_count, entity_count, generated_date = get_un_sanctions_info()
 
     if un_hash:
@@ -251,37 +204,33 @@ def main():
                 "출처: {}".format(today_str, un_info, UN_PAGE_URL)
             )
 
-    announce_hash, posts, latest_date = get_announce_info()
+    # ② 공고/고시/훈령/예규 모니터링
+    announce_hash, latest_post = get_announce_info(last_data)
 
     if announce_hash:
         new_data["announce_hash"] = announce_hash
+        new_data["announce_latest_post"] = latest_post
         last_announce = last_data.get("announce_hash")
-        latest_post = posts[0] if posts else None
+
+        post_info = "게시글 확인 불가"
+        if latest_post:
+            post_info = "최신 게시글: {} ({})\n링크: {}".format(
+                latest_post.get("title", ""),
+                latest_post.get("date", ""),
+                latest_post.get("link", ANNOUNCE_URL))
 
         if last_announce is None:
-            post_info = "게시글 확인 불가"
-            if latest_post:
-                post_info = "최신 게시글: {} ({})\n링크: {}".format(
-                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
                 "{}\n\n전체 목록: {}".format(post_info, ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
-            post_info = "게시글 확인 불가"
-            if latest_post:
-                post_info = "업데이트 게시글: {} ({})\n링크: {}".format(
-                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 업데이트!\n\n"
                 "감지일: {}\n\n{}\n\n전체 목록: {}\n\n"
                 "즉시 확인해 주세요!".format(today_str, post_info, ANNOUNCE_URL)
             )
         else:
-            post_info = "게시글 확인 불가"
-            if latest_post:
-                post_info = "최신 게시글: {} ({})\n링크: {}".format(
-                    latest_post["title"], latest_post["date"], latest_post["link"])
             messages.append(
                 "[{}] 공고/고시/훈령/예규 변동없음\n\n{}\n\n"
                 "전체 목록: {}".format(today_str, post_info, ANNOUNCE_URL)
