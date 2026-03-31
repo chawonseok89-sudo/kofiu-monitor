@@ -13,8 +13,9 @@ UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated
 
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
 ANNOUNCE_HASH_URL = "https://www.kofiu.go.kr/cmn/file/downloadLaw.do"
-ANNOUNCE_API = "https://www.kofiu.go.kr/cmn/board/selectBoardListFile.do?ntcnYardOrdrNo=&page=1&seCd=0006&selScope=&size=3&subSech="
-ANNOUNCE_VIEW = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo={}&seCd=0006"
+
+ANNOUNCE_INIT_TITLE = "특정 금융거래정보 보고 등에 관한 검사 및 제재규정 일부개정규정"
+ANNOUNCE_INIT_DATE = "2026.02.19"
 
 HASH_FILE = "last_hash.json"
 
@@ -65,47 +66,16 @@ def get_un_sanctions_info():
         return None, 0, 0, "확인 불가"
 
 
-def get_announce_info():
+def get_announce_hash():
     try:
-        print("공고/고시 정보 조회")
+        print("공고/고시 변경 감지")
         headers = {"User-Agent": "Mozilla/5.0", "Referer": ANNOUNCE_URL}
-
-        hash_resp = requests.get(ANNOUNCE_HASH_URL, headers=headers, timeout=10)
-        page_hash = hashlib.md5(hash_resp.text.encode()).hexdigest()
-
-        api_resp = requests.get(ANNOUNCE_API, headers=headers, timeout=10)
-        print("API 응답코드: {}".format(api_resp.status_code))
-
-        posts = []
-        data = api_resp.json()
-        items = data.get("result", data.get("list", data.get("data", [])))
-
-        if isinstance(items, list):
-            for item in items[:3]:
-                title = item.get("ntcnYardSjNm", item.get("ntcnYardSj", ""))
-                date_val = item.get("ntcnYardRgiDt", item.get("ntcnYardChangeDt", ""))
-                order_no = item.get("ntcnYardOrdrNo", "")
-
-                if date_val and len(date_val) >= 10:
-                    date_val = date_val[:10].replace("-", ".")
-
-                try:
-                    if int(date_val[:4]) > 2030:
-                        continue
-                except:
-                    pass
-
-                link = ANNOUNCE_VIEW.format(order_no) if order_no else ANNOUNCE_URL
-                if title:
-                    posts.append({"title": title[:60], "date": date_val, "link": link})
-
-        posts.sort(key=lambda x: x.get("date", ""), reverse=True)
-        print("추출된 게시글: {}".format(posts))
-        return page_hash, posts
-
+        response = requests.get(ANNOUNCE_HASH_URL, headers=headers, timeout=10)
+        print("공고/고시 응답코드: {}".format(response.status_code))
+        return hashlib.md5(response.text.encode()).hexdigest()
     except Exception as e:
         print("공고/고시 오류: {}".format(e))
-        return None, []
+        return None
 
 
 def send_telegram(message):
@@ -206,18 +176,18 @@ def main():
             )
 
     # ② 공고/고시/훈령/예규 모니터링
-    announce_hash, posts = get_announce_info()
+    announce_hash = get_announce_hash()
 
     if announce_hash:
         new_data["announce_hash"] = announce_hash
         last_announce = last_data.get("announce_hash")
-        latest_post = posts[0] if posts else None
 
-        if latest_post:
-            recent_info = "최근 게시글: {} ({})\n링크: {}".format(
-                latest_post["title"], latest_post["date"], latest_post["link"])
-        else:
-            recent_info = "최근 게시글: 확인 불가"
+        saved_title = last_data.get("announce_title", ANNOUNCE_INIT_TITLE)
+        saved_date = last_data.get("announce_date", ANNOUNCE_INIT_DATE)
+        new_data["announce_title"] = saved_title
+        new_data["announce_date"] = saved_date
+
+        recent_info = "최근 게시글: {} ({})".format(saved_title, saved_date)
 
         if last_announce is None:
             messages.append(
@@ -226,12 +196,14 @@ def main():
                 "전체 목록: {}".format(recent_info, ANNOUNCE_URL)
             )
         elif announce_hash != last_announce:
+            new_data["announce_title"] = "새 게시글 등록됨 - 직접 확인 필요"
+            new_data["announce_date"] = today_key
             messages.append(
                 "[긴급] 공고/고시/훈령/예규 변경 감지!\n\n"
                 "감지일: {}\n\n"
-                "{}\n\n"
+                "새로운 공고/고시/훈령/예규가 등록되었습니다.\n\n"
                 "전체 목록: {}\n\n"
-                "즉시 확인해 주세요!".format(today_str, recent_info, ANNOUNCE_URL)
+                "즉시 확인해 주세요!".format(today_str, ANNOUNCE_URL)
             )
         else:
             messages.append(
