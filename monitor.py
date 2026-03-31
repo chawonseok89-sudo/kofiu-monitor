@@ -146,34 +146,42 @@ def main():
         else:
             prev_line = "전일({}) 대비: 데이터 누적 중 (내일부터 표시)".format(prev_day)
 
-        un_info = (
-            "[ UN 제재대상자 현황 ]\n"
-            "개인: {}명 / 단체: {}개\n"
-            "명단 기준일: {}\n\n"
-            "{}"
-        ).format(person_count, entity_count, generated_date, prev_line)
-
         if last_hash is None:
-            messages.append(
-                "[koFIU 금융거래등제한대상자 모니터링 시작]\n\n"
-                "[ UN 제재대상자 현황 ]\n"
-                "개인: {}명 / 단체: {}개\n"
-                "명단 기준일: {}\n\n"
-                "* 전일 비교는 데이터 누적 후 표시됩니다\n\n"
-                "출처: {}".format(person_count, entity_count, generated_date, UN_PAGE_URL)
-            )
+            un_msg = (
+                "🚨 <b>[koFIU 모니터링 시작]</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "🇺🇳 <b>UN 제재대상자 현황</b>\n"
+                "┣ 개인: <b>{}명</b>\n"
+                "┣ 단체: <b>{}개</b>\n"
+                "┣ 명단 기준일: {}\n"
+                "┗ * 전일 비교는 내일부터 표시\n\n"
+                "출처: {}"
+            ).format(person_count, entity_count, generated_date, UN_PAGE_URL)
         elif un_hash != last_hash:
-            messages.append(
-                "[긴급] UN 제재대상자 명단 변경 감지!\n\n"
-                "감지일: {}\n\n{}\n\n"
+            un_msg = (
+                "🚨 <b>[긴급] UN 제재대상자 명단 변경!</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "🇺🇳 <b>UN 제재대상자 현황</b>\n"
+                "┣ 개인: <b>{}명</b>\n"
+                "┣ 단체: <b>{}개</b>\n"
+                "┣ 명단 기준일: {}\n"
+                "┗ {}\n\n"
                 "출처: {}\n\n"
-                "즉시 확인하여 시스템에 반영해 주세요!".format(today_str, un_info, UN_PAGE_URL)
-            )
+                "⚠️ 즉시 확인하여 시스템에 반영해 주세요!"
+            ).format(person_count, entity_count, generated_date, prev_line, UN_PAGE_URL)
         else:
-            messages.append(
-                "[{}] UN 제재대상자 명단 변동없음\n\n{}\n\n"
-                "출처: {}".format(today_str, un_info, UN_PAGE_URL)
-            )
+            un_msg = (
+                "✅ <b>[{}] UN 제재대상자 변동없음</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "🇺🇳 <b>UN 제재대상자 현황</b>\n"
+                "┣ 개인: <b>{}명</b>\n"
+                "┣ 단체: <b>{}개</b>\n"
+                "┣ 명단 기준일: {}\n"
+                "┗ {}\n\n"
+                "출처: {}"
+            ).format(today_str, person_count, entity_count, generated_date, prev_line, UN_PAGE_URL)
+
+        messages.append(un_msg)
 
     # ② 공고/고시/훈령/예규 모니터링
     announce_hash = get_announce_hash()
@@ -187,35 +195,45 @@ def main():
         new_data["announce_title"] = saved_title
         new_data["announce_date"] = saved_date
 
-        recent_info = "최근 게시글: {} ({})".format(saved_title, saved_date)
-
         if last_announce is None:
-            messages.append(
-                "[koFIU 공고/고시/훈령/예규 모니터링 시작]\n\n"
-                "{}\n\n"
-                "전체 목록: {}".format(recent_info, ANNOUNCE_URL)
-            )
+            ann_msg = (
+                "🚨 <b>[koFIU 모니터링 시작]</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "📋 <b>공고/고시/훈령/예규</b>\n"
+                "┣ 최근 게시글:\n"
+                "┃  {}\n"
+                "┣ 게시일: {}\n"
+                "┗ 변경 발생 시 즉시 알림 드립니다\n\n"
+                "전체 목록: {}"
+            ).format(saved_title, saved_date, ANNOUNCE_URL)
         elif announce_hash != last_announce:
             new_data["announce_title"] = "새 게시글 등록됨 - 직접 확인 필요"
             new_data["announce_date"] = today_key
-            messages.append(
-                "[긴급] 공고/고시/훈령/예규 변경 감지!\n\n"
-                "감지일: {}\n\n"
-                "새로운 공고/고시/훈령/예규가 등록되었습니다.\n\n"
+            ann_msg = (
+                "🚨 <b>[긴급] 공고/고시/훈령/예규 변경 감지!</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "📋 <b>공고/고시/훈령/예규</b>\n"
+                "┗ 새로운 게시글이 등록되었습니다!\n\n"
                 "전체 목록: {}\n\n"
-                "즉시 확인해 주세요!".format(today_str, ANNOUNCE_URL)
-            )
+                "⚠️ 즉시 확인해 주세요!"
+            ).format(ANNOUNCE_URL)
         else:
-            messages.append(
-                "[{}] 공고/고시/훈령/예규 변동없음\n\n"
-                "{}\n\n"
-                "전체 목록: {}".format(today_str, recent_info, ANNOUNCE_URL)
-            )
+            ann_msg = (
+                "✅ <b>[{}] 공고/고시/훈령/예규 변동없음</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "📋 <b>공고/고시/훈령/예규</b>\n"
+                "┣ 최근 게시글:\n"
+                "┃  {}\n"
+                "┣ 게시일: {}\n"
+                "┗ 전체 목록: {}"
+            ).format(today_str, saved_title, saved_date, ANNOUNCE_URL)
+
+        messages.append(ann_msg)
 
     print("전송할 메시지 수: {}".format(len(messages)))
 
     if messages:
-        full_message = "\n\n========================================\n\n".join(messages)
+        full_message = "\n\n".join(messages)
         send_telegram(full_message)
 
     if new_data:
