@@ -5,69 +5,60 @@ import os
 import json
 import re
 from datetime import datetime
+import xml.etree.ElementTree as ET
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-LIMIT_URL = "https://www.kofiu.go.kr/kor/policy/ptfps02_1.do"
+UN_XML_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
+UN_PAGE_URL = "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list"
+
 ANNOUNCE_URL = "https://www.kofiu.go.kr/kor/law/announce_list.do"
 ANNOUNCE_API = "https://www.kofiu.go.kr/cmn/board/selectBoardListFile.do?ntcnYardOrdrNo=&page=1&seCd=0006&selScope=&size=3&subSech="
 ANNOUNCE_VIEW = "https://www.kofiu.go.kr/kor/law/announce_view.do?ntcnYardOrdrNo={}&seCd=0006"
 HASH_FILE = "last_hash.json"
 
 
-def get_limit_info(url):
+def get_un_sanctions_info():
     try:
-        print("제한대상자 페이지 접속")
+        print("UN 제재 XML 다운로드 시도")
         headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        print("응답코드: {}".format(response.status_code))
+        response = requests.get(UN_XML_URL, headers=headers, timeout=30)
+        print("UN XML 응답코드: {}".format(response.status_code))
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        content = soup.get_text()
-        page_hash = hashlib.md5(content.encode()).hexdigest()
+        page_hash = hashlib.md5(response.content).hexdigest()
 
-        update_date = "확인 불가"
-        for tag in soup.find_all(string=True):
-            t = tag.strip()
-            if t and ("고시" in t or "개정" in t or "최종" in t):
-                update_date = t
-                break
+        root = ET.fromstring(response.content)
+        print("XML 루트 태그: {}".format(root.tag))
 
-        person_total = "확인 불가"
-        group_total = "확인 불가"
+        person_count = 0
+        entity_count = 0
 
-        person_match = re.search(r"개인\s*[:]?\s*(\d+)\s*명", content)
-        group_match = re.search(r"단체\s*[:]?\s*(\d+)\s*개", content)
-        if person_match:
-            person_total = person_match.group(1)
-        if group_match:
-            group_total = group_match.group(1)
+        generated_date = "확인 불가"
+        date_attr = root.get("dateGenerated", root.get("date", ""))
+        if date_attr:
+            generated_date = date_attr[:10]
 
-        if person_total == "확인 불가":
-            tables = soup.find_all("table")
-            for table in tables:
-                rows = table.find_all("tr")
-                for row in rows:
-                    cells = row.find_all(["td", "th"])
-                    row_text = " ".join([c.get_text(strip=True) for c in cells])
-                    print("테이블행: {}".format(row_text[:80]))
-                    if "합계" in row_text or "총계" in row_text:
-                        nums = []
-                        for cell in cells:
-                            t = cell.get_text(strip=True)
-                            if re.match(r"^\d+$", t) and not (1000 <= int(t) <= 9999):
-                                nums.append(t)
-                        print("합계행 숫자들: {}".format(nums))
-                        if len(nums) >= 2:
-                            person_total = nums[0]
-                            group_total = nums[1]
+        for child in root:
+            tag = child.tag.upper()
+            print("섹션: {}".format(tag))
+            if "INDIVIDUAL" in tag:
+                person_count = len(child.findall("./INDIVIDUAL") or list(child))
+            elif "ENTITY" in tag or "ENTITIES" in tag:
+                entity_count = len(child.findall("./ENTITY") or list(child))
 
-        print("개인:{} 단체:{}".format(person_total, group_total))
-        return page_hash, update_date, person_total, group_total
+        if person_count == 0 and entity_count == 0:
+            individuals = root.findall(".//INDIVIDUAL")
+            entities = root.findall(".//ENTITY")
+            person_count = len(individuals)
+            entity_count = len(entities)
+
+        print("개인:{} 단체:{} 날짜:{}".format(person_count, entity_count, generated_date))
+        return page_hash, person_count, entity_count, generated_date
+
     except Exception as e:
-        print("제한대상자 오류: {}".format(e))
-        return None, None, None, None
+        print("UN XML 오류: {}".format(e))
+        return None, 0, 0, "확인 불가"
 
 
 def get_announce_info():
@@ -79,14 +70,12 @@ def get_announce_info():
         }
         response = requests.get(ANNOUNCE_API, headers=headers, timeout=10)
         print("응답코드: {}".format(response.status_code))
-        print("응답내용: {}".format(response.text[:300]))
 
         page_hash = hashlib.md5(response.text.encode()).hexdigest()
         posts = []
 
         data = response.json()
         items = data.get("result", data.get("list", data.get("data", [])))
-        print("items 길이: {}".format(len(items) if isinstance(items, list) else "N/A"))
 
         if isinstance(items, list):
             for item in items[:3]:
@@ -113,7 +102,7 @@ def send_telegram(message):
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     response = requests.post(url, data=data)
     print("텔레그램 응답코드: {}".format(response.status_code))
-    print("텔레그램 응답: {}".format(response.text[:300]))
+    print("텔레그램 응답: {}".format(response.text[:200]))
 
 
 def load_hashes():
@@ -141,41 +130,41 @@ def main():
     new_hashes = {}
     messages = []
 
-    limit_hash, limit_date, person_total, group_total = get_limit_info(LIMIT_URL)
+    # ① UN 제재 명단 모니터링
+    un_hash, person_count, entity_count, generated_date = get_un_sanctions_info()
 
-    if limit_hash:
-        new_hashes["limit"] = limit_hash
-        last_limit = last_hashes.get("limit")
+    if un_hash:
+        new_hashes["un"] = un_hash
+        last_un = last_hashes.get("un")
 
         un_info = (
             "[ UN 제재대상자 현황 ]\n"
-            "개인: {}명 / 단체: {}개"
-        ).format(person_total, group_total)
+            "개인: {}명 / 단체: {}개\n"
+            "명단 기준일: {}"
+        ).format(person_count, entity_count, generated_date)
 
-        if last_limit is None:
+        if last_un is None:
             messages.append(
                 "[koFIU 금융거래등제한대상자 모니터링 시작]\n\n"
                 "{}\n\n"
-                "최근 업데이트: {}\n"
-                "링크: {}".format(un_info, limit_date, LIMIT_URL)
+                "출처: {}".format(un_info, UN_PAGE_URL)
             )
-        elif limit_hash != last_limit:
+        elif un_hash != last_un:
             messages.append(
-                "[긴급] 금융거래등제한대상자 명단 변경 감지!\n\n"
+                "[긴급] UN 제재대상자 명단 변경 감지!\n\n"
                 "감지일: {}\n\n"
                 "{}\n\n"
-                "최근 업데이트: {}\n"
-                "링크: {}\n\n"
-                "즉시 확인하여 시스템에 반영해 주세요!".format(today, un_info, limit_date, LIMIT_URL)
+                "출처: {}\n\n"
+                "즉시 확인하여 시스템에 반영해 주세요!".format(today, un_info, UN_PAGE_URL)
             )
         else:
             messages.append(
-                "[{}] 금융거래등제한대상자 명단 변동없음\n\n"
+                "[{}] UN 제재대상자 명단 변동없음\n\n"
                 "{}\n\n"
-                "최근 업데이트: {}\n"
-                "링크: {}".format(today, un_info, limit_date, LIMIT_URL)
+                "출처: {}".format(today, un_info, UN_PAGE_URL)
             )
 
+    # ② 공고/고시/훈령/예규 모니터링
     announce_hash, posts, latest_date = get_announce_info()
 
     if announce_hash:
